@@ -1,43 +1,53 @@
-use std::env::temp_dir;
 use std::error::Error;
-use std::path::{Path, PathBuf};
-use tempfile::TempDir;
-use crate::extract::Extractor;
+use std::fs::File;
+use std::io::BufReader;
+use std::path::PathBuf;
+use crate::mountpoint::TempMountPoint;
+use fuser_async::FilesystemFUSE;
+use squashfs_async::{pools, Options, SquashFs};
 
-pub(crate) struct TempMountPoint {
-    // keeping a reference of TempDir
-    // conveniently, it will clean up itself when the variable is dereferenced
-    // we just need to keep it alive while in use
-    temp_dir: TempDir,
+pub(crate) struct SquashfuseMounter {
+    temp_mount_point: TempMountPoint,
 }
 
-impl TempMountPoint {
-    pub(crate) fn new(argv0: &PathBuf) -> Result<Self, Box<dyn Error>> {
-        let filename = argv0.file_name().unwrap().to_str().unwrap();
-
-        let mut prefix = String::from(".mount_");
-        prefix.push_str(&filename[..6.min(filename.len())]);
-
-        let temp_dir = tempfile::Builder::new()
-            .prefix(&prefix)
-            .tempdir()?;
-
-        Ok(Self { temp_dir })
+impl SquashfuseMounter {
+    pub(crate) fn new(temp_mount_point: TempMountPoint) -> Self {
+        SquashfuseMounter { temp_mount_point }
     }
 
-    pub(crate) fn mount(&self) -> Result<(), Box<dyn Error>> {
-        todo!()
-    }
+    pub(crate) async fn mount(self, appimage_path: &PathBuf, fs_offset: u64, verbose: bool) -> Result<(), Box<dyn Error>> {
+        let reader = BufReader::new(File::open(&appimage_path)?);
 
-    pub(crate) fn run(&self) -> Result<(), Box<dyn Error>> {
-        todo!()
-    }
+        // let fs = squashfuse_rs::SquashfsFilesystem::new(
+        //     backhand::FilesystemReader::from_reader_with_offset(reader, fs_offset)?,
+        //     verbose
+        // );
+        // let mount_options = vec![
+        //     fuser::MountOption::FSName("squashfuse".to_string()),
+        //     fuser::MountOption::RO,
+        // ];
+        //
+        // if let Err(error) = fuser::mount2(fs, self.temp_mount_point.path(), &mount_options) {
+        //     return Err(error.into());
+        // }
 
-    pub(crate) fn path(&self) -> &Path {
-        self.temp_dir.path()
-    }
+        let options = Options {
+            cache_mb: 100,
+            readers: 4,
+            direct_limit: 0,
+            fs_offset,
+        };
 
-    pub fn close(self) -> std::io::Result<()> {
-        self.temp_dir.close()
+        let fs = SquashFs::<pools::LocalReadersPoolTokio>::open(appimage_path, &options).await?;
+
+        let fuse = FilesystemFUSE::new(fs);
+
+        let _mount = fuser::spawn_mount2(
+            fuse,
+            self.temp_mount_point.path(),
+            &[fuser::MountOption::RO, fuser::MountOption::Async],
+        )?;
+        tokio::signal::ctrl_c().await?;
+        Ok(())
     }
 }

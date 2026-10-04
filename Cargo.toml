@@ -3,18 +3,27 @@ name = "type2-rustime"
 version = "0.1.0"
 edition = "2024"
 
+[patch.crates-io]
+fuser-async = { git = "https://github.com/TheAssassin/fuser-async.git", branch = "readlink"  }
+squashfs-async = { git = "https://github.com/TheAssassin/squashfs-async.git", branch = "appimage" }
+
 [dependencies]
 clap = { version = "4.6.7", features = ["derive", "color", "env"] }
 daemonize = "0.5.0"
 elf = "0.8.0"
-squashfuse-rs = "0.3.0"
 tempfile = "3.27.0"
 backhand = "0.18.0"
-fuser = "0.14.0"
 pretty_env_logger = "0.5.0"
 log = "0.4.34"
 anyhow = "1.0.104"
 subprocess = "1.2.1"
+fuser-async = "0.1.1"
+squashfs-async = { version = "0.1.2" }
+tokio = "1.53.2"
+fuser = "0.11.1"
+#squashfuse-rs = "0.3.0"
+#squashfuse-rs = { version = "0.3.0", path = "squashfuse-rs/squashfuse-rs" }
+#fuser-async = { path = "squashfs-async/vendor/fuser-async" }
 
 [profile.release]
 lto = true

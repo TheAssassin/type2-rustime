@@ -1,15 +1,19 @@
 mod elf_util;
-mod mount;
+mod mountpoint;
 mod extract;
+mod mount;
 
 use crate::elf_util::AppImageElf;
 use crate::extract::Extractor;
-use crate::mount::TempMountPoint;
+use crate::mountpoint::TempMountPoint;
 use clap::Parser;
-use std::process::{exit, ExitCode};
+use std::process::{ExitCode, Command};
 use std::env;
-use std::path::{Path, PathBuf};
+use std::os::unix::process::CommandExt;
+use std::path::Path;
+use log::error;
 use subprocess::Exec;
+use crate::mount::SquashfuseMounter;
 
 // TODO: rest of the docs
 // TODO: insert real version number for --appimage-version to work
@@ -89,9 +93,9 @@ fn main() -> ExitCode {
 
     // create temporary directory as we need one for various reasons
     // note: uses Rust's std::env::temp_dir() which honors $TMPDIR
-    let temp_dir = tempfile::TempDir::with_prefix("appimage-runtime-").unwrap_or_else(|error| {
-        todo!()
-    });
+    // let temp_dir = tempfile::TempDir::with_prefix("appimage-runtime-").unwrap_or_else(|error| {
+    //     todo!()
+    // });
 
     let mut elf = AppImageElf::new(appimage_path.clone()).expect("Failed to parse ELF");
 
@@ -131,31 +135,60 @@ fn main() -> ExitCode {
         return 0.into();
     }
 
+    // whether we extract-and-run or mount-and-run, we need a mountpoint
+    let temp_mount_point = TempMountPoint::new(&Path::new(&argv0_path).to_path_buf()).expect("Failed to create mountpoint");
+    println!("{:?}", temp_mount_point.path());
+
     if args.extract_and_run {
-        let mp = TempMountPoint::new(&Path::new(&argv0_path).to_path_buf()).expect("PANIIIIIIIIC");
-
-        println!("{:?}", mp.path());
-
-        let extractor = Extractor::new(appimage_path, fs_offset, mp.path().into());
+        let extractor = Extractor::new(appimage_path, fs_offset, temp_mount_point.path().into());
         extractor.extract(verbose).expect("Extraction failed");
 
         // TODO: forward args
         // TODO: better error handling
         let exit_status = Exec::cmd("./AppRun")
-            .cwd(mp.path())
+            .cwd(temp_mount_point.path())
             .start()
             .expect("Failed to run AppRun process")
             .wait()
             .expect("Failed to wait for AppRun process");
-
-        //mp.close().unwrap();
 
         let exit_code = exit_status.code().expect("Failed to read AppRun exit code");
 
         return ExitCode::from(u8::try_from(exit_code).expect("child exit code is outside 0..=255"));
     }
 
-    todo!()
+    // now that all parameters and workflows are exhausted, we know that we have to mount the
+    // filesystem to our temporary mount point
+    let mount_path = temp_mount_point.path().to_path_buf();
+    let mounter = SquashfuseMounter::new(temp_mount_point);
+    let rt = tokio::runtime::Runtime::new().unwrap();
 
-    //0.into()
+    // if set, we can just run the filesystem in foreground
+    if args.mount {
+        if let Err(error) = rt.block_on(mounter.mount(&appimage_path, fs_offset, verbose)) {
+            error!("Failed to mount AppImage: {}", error);
+            return 1.into();
+        }
+
+        // print mount point
+        println!("{}", mount_path.to_str().unwrap());
+
+        return 0.into();
+    }
+
+    // TODO: run in daemonized process
+    if let Err(error) = rt.block_on(mounter.mount(&appimage_path, fs_offset, verbose)) {
+        error!("Failed to mount AppImage: {}", error);
+        return 1.into();
+    }
+
+    // this would never return unless there is an error
+    // TODO: while spawn_fuse2 in the mounter creates a proper background
+    let err = Command::new("./AppRun")
+        .current_dir(mount_path)
+        // TODO: args
+        .exec();
+
+    error!("Error running AppRun: {}", err);
+    1.into()
 }

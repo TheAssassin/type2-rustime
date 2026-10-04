@@ -88,7 +88,7 @@ impl AppImageElf {
             // need to open our own file handle, we can't reuse the one from the elf::ElfStream
             // however, we don't just keep one around pointlessly
             // the sections may or may not be read, therefore just open on demand
-            let mut file = File::open(&self.path).unwrap_or_else(|error| {
+            let file = File::open(&self.path).unwrap_or_else(|error| {
                 println!("{}", error);
                 // should never happen
                 todo!()
